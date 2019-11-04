@@ -45,7 +45,7 @@ def get_transform(augment=True, input_size=224):
     normalize = __imagenet_stats
     scale_size = int(input_size / 0.875)
     if augment:
-        return inception_preproccess(input_size=input_size, normalize=normalize)
+        return woof_preproccess(input_size=input_size, normalize=normalize)
     else:
         return scale_crop(input_size=input_size, scale_size=scale_size, normalize=normalize)
 

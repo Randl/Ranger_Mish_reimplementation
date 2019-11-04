@@ -18,9 +18,9 @@ from sched import CosineLR
 from utils import flops_benchmark
 from utils.cross_entropy import CrossEntropyLoss
 from utils.data import get_loaders
-from utils.lookahead import RAdam
+from utils.lookahead import RAdam, Ralamb
 from utils.optimizer_wrapper import OptimizerWrapper
-from utils.utils import is_bn
+from utils.utils import is_bn, save_checkpoint
 
 
 def get_args():
@@ -45,7 +45,7 @@ def get_args():
     parser.add_argument('-b', '--batch-size', default=64, type=int, metavar='N', help='mini-batch size (default: 64)')
     parser.add_argument('--learning_rate', '-lr', type=float, default=4e-3, help='The learning rate for batch of 64 '
                                                                                  '(scaled for bigger/smaller batches).')
-    parser.add_argument('--momentum', '-m', type=float, default=0.9, help='Momentum.')
+    parser.add_argument('--momentum', '-m', type=float, default=0.95, help='Momentum.')
     parser.add_argument('--decay', '-d', type=float, default=1e-2, help='Weight decay for batch of 64 '
                                                                         '(scaled for bigger/smaller batches).')
     parser.add_argument('--gamma', type=float, default=0.7, help='LR is multiplied by gamma at scheduled epochs.')
@@ -53,7 +53,8 @@ def get_args():
                         help='Decrease learning rate at these epochs.')
     parser.add_argument('--gamma-step', type=int, default=1, help='Decrease learning rate after those epochs.')
     parser.add_argument('--step', type=int, default=40, help='Decrease learning rate each time.')
-    parser.add_argument('--warmup', default=0, type=int, metavar='N', help='Warmup length')
+    parser.add_argument('--warmup', default=0, type=float, metavar='N', help='Warmup length')
+    parser.add_argument('--flat', default=0, type=float, metavar='N', help='Flat length')
     parser.add_argument('--smooth-eps', type=float, default=0.1, help='Label smoothing epsilon value.')
     parser.add_argument('--clip-grad', type=float, default=0, help='Clip gradients')
 
@@ -70,7 +71,7 @@ def get_args():
                         help='manual epoch number (useful on restarts)')
     parser.add_argument('--log-interval', type=int, default=100, metavar='N',
                         help='Number of batches between log messages')
-    parser.add_argument('--seed', type=int, default=42, metavar='S', help='random seed (default: random)')
+    parser.add_argument('--seed', type=int, default=None, metavar='S', help='random seed (default: random)')
     parser.add_argument('--determenistic', dest='deter', action='store_true', help='use determenistic environment')
     parser.add_argument('--grad-debug', dest='grad_debug', action='store_true', help='use anomaly detection')
 
@@ -137,8 +138,8 @@ def get_args():
         raise ValueError('Wrong type!')  # TODO int8
 
     # Adjust lr for batch size
-    args.learning_rate *= args.batch_size / 256. * args.world_size
-    args.decay *= args.batch_size / 256. * args.world_size
+    args.learning_rate *= args.batch_size / 64. * args.world_size
+    args.decay *= args.batch_size / 64. * args.world_size
 
     args.epochs -= 1
 
@@ -184,6 +185,9 @@ def main():
 
     train_loader, val_loader = get_loaders(args.dataroot, args.batch_size, args.batch_size, args.input_size,
                                            args.workers, args.world_size, args.local_rank)
+    args.num_batches = len(train_loader) * args.epochs
+    args.start_step = len(train_loader) * args.start_epoch
+
     model_class, model_args = models.__dict__[args.a], {'c_out': args.num_classes, 'sa': args.self_attention,
                                                         'sym': args.sa_symmetry}
     model = model_class(**model_args)
@@ -252,11 +256,11 @@ def main():
     logger.info("Prepared in {}".format(datetime.now() - start))
 
     train_network(args.start_epoch, args.epochs, optim, model, train_loader, val_loader, criterion, device, dtype,
-                  writer, best_test, args.child, args.experiment_name, logger)
+                  writer, best_test, args.child, args.experiment_name, logger, args.save_path, args.local_rank)
 
 
 def train_network(start_epoch, epochs, optim, model, train_loader, val_loader, criterion, device, dtype, writer,
-                  best_test, child, experiment_name, logger):
+                  best_test, child, experiment_name, logger, save_path, local_rank):
     my_range = range if child else trange
     train_it, val_it = 0, 0
     for epoch in my_range(start_epoch, epochs + 1):
@@ -265,7 +269,9 @@ def train_network(start_epoch, epochs, optim, model, train_loader, val_loader, c
         val_it, _, val_accuracy1, val_accuracy5 = val(model, val_loader, logger, criterion, writer, experiment_name,
                                                       epoch, val_it, device, dtype, child)
         optim.epoch_step()
-
+        save_checkpoint({'epoch': epoch, 'state_dict': model.state_dict(), 'best_prec1': best_test,
+                         'optimizer': optim.state_dict()}, val_accuracy1 > best_test, filepath=save_path,
+                        local_rank=local_rank)
         if val_accuracy1 > best_test:
             best_test = val_accuracy1
         logger.debug('Best validation accuracy so far is {:.2f}% top-1'.format(best_test * 100.))
@@ -286,7 +292,10 @@ def init_optimizer(args, train_loader, model, writer=None, experiment_name=None,
         optimizer_params = {"lr": args.learning_rate, "weight_decay": args.decay, "amsgrad": args.amsgrad}
     elif args.optim == 'radam':
         optimizer_class = RAdam
-        optimizer_params = {"lr": args.learning_rate, "weight_decay": args.decay}
+        optimizer_params = {"lr": args.learning_rate, "weight_decay": args.decay, "betas": (args.momentum, 0.99)}
+    elif args.optim == 'ralamb':
+        optimizer_class = Ralamb
+        optimizer_params = {"lr": args.learning_rate, "weight_decay": args.decay, "betas": (args.momentum, 0.99)}
     else:
         raise ValueError('Wrong optimizer!')
 
@@ -300,7 +309,8 @@ def init_optimizer(args, train_loader, model, writer=None, experiment_name=None,
         scheduler_params = {"milestones": args.schedule, "gamma": args.gamma, "last_epoch": args.start_epoch - 1}
     elif args.sched == 'cosine':
         scheduler_class = CosineLR
-        scheduler_params = {"max_epochs": args.epochs, "warmup_epochs": args.warmup, "iter_in_epoch": len(train_loader),
+        scheduler_params = {"max_epochs": args.epochs + 1, "warmup_epochs": args.warmup,
+                            "iter_in_epoch": len(train_loader), "flat_epochs": args.flat,
                             "last_epoch": args.start_step - 1}
     elif args.sched == 'gamma':
         scheduler_class = StepLR

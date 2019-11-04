@@ -30,6 +30,8 @@ def train(model, loader, logger, writer, experiment_name, epoch, iter, optim, cr
         writer.add_scalars('batch/top1', {experiment_name: corr[0] / data.shape[0]}, iter)
         writer.add_scalars('batch/top5', {experiment_name: corr[1] / data.shape[0]}, iter)
         iter += 1
+    writer.add_scalars('epoch/top1', {experiment_name + "_train": correct1 / len(loader.sampler)}, epoch)
+    writer.add_scalars('epoch/top5', {experiment_name + "_train": correct5 / len(loader.sampler)}, epoch)
     logger.debug(
         'Train Epoch: {}\tLoss: {:.6f}. '
         'Top-1 accuracy: {:.2f}%. '
@@ -60,6 +62,9 @@ def val(model, loader, logger, criterion, writer, experiment_name, epoch, iter, 
 
     test_loss /= len(loader)
 
+    writer.add_scalars('epoch/loss', {experiment_name + "_val": loss.item()}, epoch)
+    writer.add_scalars('epoch/top1', {experiment_name + "_val": correct1 / len(loader.sampler)}, epoch)
+    writer.add_scalars('epoch/top5', {experiment_name + "_val": correct5 / len(loader.sampler)}, epoch)
     logger.debug(
         'Validation Epoch: {}\tLoss: {:.6f}. '
         'Top-1 accuracy: {:.2f}%. '

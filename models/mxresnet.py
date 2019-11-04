@@ -14,7 +14,7 @@ import torch.nn.functional as F  # (uncomment if needed,but you likely already h
 
 class Mish(nn.Module):
     def __init__(self):
-        super().__init__()
+        super(Mish, self).__init__()
         # print("Mish activation loaded...")
 
     def forward(self, x):
@@ -39,7 +39,7 @@ def conv1d(ni: int, no: int, ks: int = 1, stride: int = 1, padding: int = 0, bia
 class SimpleSelfAttention(nn.Module):
 
     def __init__(self, n_in: int, ks=1, sym=False):  # , n_out:int):
-        super().__init__()
+        super(SimpleSelfAttention, self).__init__()
 
         self.conv = conv1d(n_in, n_in, ks, padding=ks // 2, bias=False)
 
@@ -140,7 +140,7 @@ class MXResNet(nn.Sequential):
         blocks = [self._make_layer(expansion, block_szs[i], block_szs[i + 1], l, 1 if i == 0 else 2,
                                    sa=sa if i in [len(layers) - 4] else False, sym=sym)
                   for i, l in enumerate(layers)]
-        super().__init__(
+        super(MXResNet, self).__init__(
             *stem,
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
             *blocks,

@@ -77,8 +77,9 @@ class OptimizerWrapper(object):
             self.optimizer = Lookahead(self.base_optimizer, **lookahead_params)
         else:
             self.optimizer = optimizer_class(self.parameters, **optimizer_params)
+        self.lookahead = lookahead
         if optimizer_state_dict is not None:
-            self.optimizer.load_state_dict(optimizer_state_dict)
+            self.load_state_dict(optimizer_state_dict)
         self.scheduler = scheduler_class(self.optimizer, **scheduler_params)
         self.use_shadow_weights = use_shadow_weights
         self.clip_grad = clip_grad if clip_grad is not None else 0
@@ -89,7 +90,7 @@ class OptimizerWrapper(object):
     def state_dict(self):
         """Returns the state of the optimizer as a :class:`dict`.
         """
-        return self.optimizer.state_dict()
+        return self.optimizer.optimizer.state_dict() if self.lookahead else self.optimizer.state_dict()
 
     def load_state_dict(self, state_dict):
         """Loads the optimizer state.
@@ -100,7 +101,10 @@ class OptimizerWrapper(object):
         """
         # deepcopy, to be consistent with module API
         optimizer_state_dict = state_dict['state']
-        self.optimizer.__setstate__(optimizer_state_dict)
+        if self.lookahead:
+            self.optimizer.optimizer.__setstate__(optimizer_state_dict)
+        else:
+            self.optimizer.__setstate__(optimizer_state_dict)
 
     def zero_grad(self):
         """Clears the gradients of all optimized :class:`Variable` s."""

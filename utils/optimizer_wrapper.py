@@ -122,7 +122,10 @@ class OptimizerWrapper(object):
                 returns the loss. Optional for most optimizers.
         """
         if self.clip_grad > 1e-12:
-            torch.nn.utils.clip_grad_norm_(self._original_parameters, self.clip_grad)
+            if self.use_shadow_weights:
+                torch.nn.utils.clip_grad_norm_(self._original_parameters, self.clip_grad)
+            else:
+                torch.nn.utils.clip_grad_norm_(self.parameters, self.clip_grad)
         if self.use_shadow_weights:
             copy_params_grad(self.parameters, self._original_parameters)
         self.optimizer.step(closure)

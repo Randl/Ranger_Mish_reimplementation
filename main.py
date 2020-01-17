@@ -24,7 +24,7 @@ from utils.utils import is_bn, save_checkpoint
 
 
 def get_args():
-    parser = argparse.ArgumentParser(description='Hemmorhage')
+    parser = argparse.ArgumentParser(description='Ranger-Mish')
     parser.add_argument('--dataroot', required=True, metavar='PATH',
                         help='Path to dataset')
     parser.add_argument('--device', default='cuda', help='device assignment ("cpu" or "cuda")')
@@ -84,6 +84,8 @@ def get_args():
                         help='use self-attention')
     parser.add_argument('--sa-symmetry', '-sym', dest='sa_symmetry', action='store_true',
                         help='use symmetry for self-attention')
+    parser.add_argument('--blur', dest='blur', action='store_true',
+                        help='use blurred pooling')
     parser.add_argument('--experiment-name', default='exp1', type=str, help='experiment name')
 
     parser.add_argument('--num-classes', type=int, default=10, help='Number of classes.')
@@ -188,8 +190,8 @@ def main():
     args.num_batches = len(train_loader) * args.epochs
     args.start_step = len(train_loader) * args.start_epoch
 
-    model_class, model_args = models.__dict__[args.a], {'c_out': args.num_classes, 'sa': args.self_attention,
-                                                        'sym': args.sa_symmetry}
+    model_class, model_args = models.__dict__[args.a], {'num_classes': args.num_classes, 'sa': args.self_attention,
+                                                        'sym': args.sa_symmetry, 'blur': args.blur}
     model = model_class(**model_args)
     criterion = CrossEntropyLoss(smooth_eps=args.smooth_eps)
 
@@ -224,7 +226,7 @@ def main():
 
     # optionally resume from a checkpoint
     writer_log_dir = os.path.join(args.save_path, 'tb{}'.format(args.local_rank))  # TODO only main
-    writer = SummaryWriter(log_dir=args.save_path)
+    writer = SummaryWriter(log_dir=args.save_path) if not args.child else None
     if args.resume:
         if os.path.isfile(args.resume):
             logger.info("=> loading checkpoint '{}'".format(args.resume))

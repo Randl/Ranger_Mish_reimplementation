@@ -9,7 +9,9 @@ from functools import partial
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F  # (uncomment if needed,but you likely already have it)
+import torch.nn.functional as F
+
+from utils.maxblurpool import MaxBlurPool2d
 
 
 class Mish(nn.Module):
@@ -94,10 +96,11 @@ def conv(ni, nf, ks=3, stride=1, bias=False):
     return nn.Conv2d(ni, nf, kernel_size=ks, stride=stride, padding=ks // 2, bias=bias)
 
 
-def noop(x): return x
+def noop(x):
+    return x
 
 
-def conv_layer(ni, nf, ks=3, stride=1, zero_bn=False, act=True):
+def conv_layer(ni, nf, ks=3, stride=1, zero_bn=False, act=True, blur=False):
     bn = nn.BatchNorm2d(nf)
     nn.init.constant_(bn.weight, 0. if zero_bn else 1.)
     layers = [conv(ni, nf, ks, stride=stride), bn]
@@ -107,53 +110,60 @@ def conv_layer(ni, nf, ks=3, stride=1, zero_bn=False, act=True):
 
 
 class ResBlock(nn.Module):
-    def __init__(self, expansion, ni, nh, stride=1, sa=False, sym=False):
+    def __init__(self, expansion, ni, nh, stride=1, sa=False, sym=False, blur=False):
         super(ResBlock, self).__init__()
         nf, ni = nh * expansion, ni * expansion
-        layers = [conv_layer(ni, nh, 3, stride=stride),
-                  conv_layer(nh, nf, 3, zero_bn=True, act=False)
+        layers = [conv_layer(ni, nh, 3, stride=stride, blur=blur),
+                  conv_layer(nh, nf, 3, zero_bn=True, act=False, blur=blur)
                   ] if expansion == 1 else [
-            conv_layer(ni, nh, 1),
-            conv_layer(nh, nh, 3, stride=stride),
-            conv_layer(nh, nf, 1, zero_bn=True, act=False)
+            conv_layer(ni, nh, 1, blur=blur),
+            conv_layer(nh, nh, 3, stride=stride, blur=blur),
+            conv_layer(nh, nf, 1, zero_bn=True, act=False, blur=blur)
         ]
         self.sa = SimpleSelfAttention(nf, ks=1, sym=sym) if sa else noop
         self.convs = nn.Sequential(*layers)
         # TODO: check whether act=True works better
         self.idconv = noop if ni == nf else conv_layer(ni, nf, 1, act=False)
-        self.pool = noop if stride == 1 else nn.AvgPool2d(2, ceil_mode=True)
+        if stride == 1:
+            self.pool = noop
+        elif not blur:
+            self.pool = nn.AvgPool2d(2, ceil_mode=True)
+        else:
+            self.pool = MaxBlurPool2d(kernel_size=2, ceil_mode=True, channels=ni, filt_size=5, stride=2)
 
-    def forward(self, x): return act_fn(self.sa(self.convs(x)) + self.idconv(self.pool(x)))
+    def forward(self, x):
+        return act_fn(self.sa(self.convs(x)) + self.idconv(self.pool(x)))
 
 
 def filt_sz(recep): return min(64, 2 ** math.floor(math.log2(recep * 0.75)))
 
 
 class MXResNet(nn.Sequential):
-    def __init__(self, expansion, layers, c_in=3, c_out=1000, sa=False, sym=False):
+    def __init__(self, expansion, layers, c_in=3, num_classes=1000, sa=False, sym=False, blur=False):
         stem = []
         sizes = [c_in, 32, 64, 64]  # modified per Grankin
         for i in range(3):
-            stem.append(conv_layer(sizes[i], sizes[i + 1], stride=2 if i == 0 else 1))
+            stem.append(conv_layer(sizes[i], sizes[i + 1], stride=2 if i == 0 else 1, blur=blur))
 
         block_szs = [64 // expansion, 64, 128, 256, 512]
         blocks = [self._make_layer(expansion, block_szs[i], block_szs[i + 1], l, 1 if i == 0 else 2,
-                                   sa=sa if i in [len(layers) - 4] else False, sym=sym)
+                                   sa=sa if i in [len(layers) - 4] else False, sym=sym, blur=blur)
                   for i, l in enumerate(layers)]
         super(MXResNet, self).__init__(
             *stem,
-            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1) if not blur else MaxBlurPool2d(kernel_size=3, stride=2,
+                                                                                            padding=1, channels=64),
             *blocks,
             nn.AdaptiveAvgPool2d(1),
             Flatten(),
-            nn.Linear(block_szs[-1] * expansion, c_out),
+            nn.Linear(block_szs[-1] * expansion, num_classes),
         )
         init_cnn(self)
 
-    def _make_layer(self, expansion, ni, nf, blocks, stride, sa=False, sym=False):
+    def _make_layer(self, expansion, ni, nf, blocks, stride, sa=False, sym=False, blur=False):
         return nn.Sequential(
             *[ResBlock(expansion, ni if i == 0 else nf, nf, stride if i == 0 else 1, sa if i in [blocks - 1] else False,
-                       sym)
+                       sym, blur)
               for i in range(blocks)])
 
 

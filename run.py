@@ -68,6 +68,6 @@ def val(model, loader, logger, criterion, writer, experiment_name, epoch, iter, 
     logger.debug(
         'Validation Epoch: {}\tLoss: {:.6f}. '
         'Top-1 accuracy: {:.2f}%. '
-        'Top-5 accuracy: {:.2f}%.'.format(epoch, test_loss, correct1 / len(loader.sampler),
-                                          correct5 / len(loader.sampler)))
+        'Top-5 accuracy: {:.2f}%.'.format(epoch, test_loss, 100. * correct1 / len(loader.sampler),
+                                          100. * correct5 / len(loader.sampler)))
     return iter, test_loss, correct1 / len(loader.sampler), correct5 / len(loader.sampler)
